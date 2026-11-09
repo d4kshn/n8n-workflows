@@ -1,0 +1,385 @@
+{
+  "name": "Send daily Splunk license usage to Teams",
+  "description": "Posts Splunk license ingestion vs the 10 GB daily threshold to a Teams group chat at 9 AM ET on weekdays (Mondays cover Fri-Sun). Built locally for import into the company n8n (2.44.5); any failure, incl. an empty Splunk result, alerts the owner's DM.",
+  "nodes": [
+    {
+      "id": "9c2bcff0-d15b-4c5b-8404-16387636f9d8",
+      "name": "Every weekday at 9 AM ET",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "a08415ae-079b-4d3d-9fe0-35ee1049c19d",
+      "name": "Run license usage search",
+      "type": "n8n-nodes-base.splunk",
+      "typeVersion": 2,
+      "position": [
+        272,
+        128
+      ],
+      "parameters": {
+        "resource": "search",
+        "operation": "create",
+        "search": "=search index=_internal source=*license_usage.log type=Usage earliest={{ $now.weekday === 1 ? \"-3d@d\" : \"-1d@d\" }} latest=@d\n| eval report_date=strftime(_time, \"%Y-%m-%d\")\n| stats sum(b) as total_bytes count as usage_events by report_date\n| eval ingestion_gb=round(total_bytes/1024/1024/1024,2)\n| table report_date ingestion_gb usage_events",
+        "additionalFields": {
+          "exec_mode": "blocking"
+        }
+      },
+      "notes": "Mondays search Friday to Sunday (earliest=-3d@d), other days search yesterday (earliest=-1d@d). Exec Mode \"Blocking\" makes Splunk reply only after the search has finished."
+    },
+    {
+      "id": "822363b4-67d9-4490-b237-48e415b5f6f1",
+      "name": "Get search results",
+      "type": "n8n-nodes-base.splunk",
+      "typeVersion": 2,
+      "position": [
+        496,
+        128
+      ],
+      "parameters": {
+        "resource": "search",
+        "operation": "getResult",
+        "searchJobId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $(\"Run license usage search\").item.json.sid }}"
+        },
+        "returnAll": true,
+        "filters": {},
+        "options": {}
+      }
+    },
+    {
+      "id": "b8ba439b-2b32-4912-b339-0f02baa94792",
+      "name": "Did Splunk return rows?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        800,
+        224
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "has-rows",
+              "leftValue": "={{ $(\"Get search results\").item.json.results ?? [] }}",
+              "rightValue": "",
+              "operator": {
+                "type": "array",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8c5f6725-369b-4feb-923f-4db703f33a87",
+      "name": "Build usage message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1024,
+        128
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "teams-payload",
+              "name": "teamsPayload",
+              "type": "object",
+              "value": "={{ (() => {\n  // One block per day: Mondays list Friday, Saturday and Sunday; other days list yesterday\n  const days = $(\"Get search results\").item.json.results;\n  const blocks = days.flatMap((day, index) => [\n    {\n      type: \"TextBlock\",\n      text: \"Splunk license usage: \" + day.report_date,\n      wrap: true,\n      // Leave a larger gap before every day after the first\n      spacing: index === 0 ? \"None\" : \"Large\"\n    },\n    {\n      type: \"TextBlock\",\n      text: \"Ingestion: \" + Number(day.ingestion_gb).toFixed(2) + \" GB of the 10 GB threshold\",\n      wrap: true,\n      spacing: \"None\"\n    }\n  ]);\n  // Teams Workflows webhooks expect an Adaptive Card wrapped in a message\n  return {\n    type: \"message\",\n    attachments: [\n      {\n        contentType: \"application/vnd.microsoft.card.adaptive\",\n        contentUrl: null,\n        content: {\n          \"$schema\": \"http://adaptivecards.io/schemas/adaptive-card.json\",\n          type: \"AdaptiveCard\",\n          version: \"1.4\",\n          body: blocks\n        }\n      }\n    ]\n  };\n})() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "notes": "Kept as its own step so test runs (which never execute the Teams post) can check the exact message, and so every run log shows what was sent."
+    },
+    {
+      "id": "c51ac39c-a9e7-4adf-b47b-5fd454936662",
+      "name": "Post usage to group chat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1248,
+        128
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "<__PLACEHOLDER_VALUE__Group chat webhook URL from Teams, without the &sig=... part__>",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $(\"Build usage message\").item.json.teamsPayload }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "notes": "Setup: URL = the group chat webhook URL from Teams Workflows with its \"&sig=...\" part removed. The sig value goes in the Query Auth credential (Name: sig, Value: the sig value).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "b4861f53-2d67-44ba-949f-3c3eed967429",
+      "name": "Fail: no usage rows",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        320
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "=Splunk returned no license usage rows. Check that the user behind the Splunk API token can search index=_internal. Splunk messages: {{ ($(\"Get search results\").item.json.messages ?? []).map(m => m.type + \": \" + m.text).join(\"; \") || \"none\" }}"
+      }
+    },
+    {
+      "id": "578b64ac-37c9-418e-8140-4f182e59f713",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        224
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a06a197e-9f50-4fbf-be46-2600a0681c6a",
+      "name": "Build error message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        272,
+        352
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "teams-payload",
+              "name": "teamsPayload",
+              "type": "object",
+              "value": "={{ (() => {\n  // A failed step reports under \"execution\"; a failed schedule trigger reports under \"trigger\"\n  const failure = $(\"On workflow error\").item.json;\n  const error = failure.execution?.error ?? failure.trigger?.error ?? {};\n  const blocks = [\n    {\n      type: \"TextBlock\",\n      text: failure.workflow.name + \" failed\",\n      weight: \"Bolder\",\n      wrap: true\n    },\n    {\n      type: \"TextBlock\",\n      text: \"Step: \" + (failure.execution?.lastNodeExecuted ?? \"schedule trigger\"),\n      wrap: true,\n      spacing: \"Small\"\n    },\n    {\n      type: \"TextBlock\",\n      text: \"Error: \" + (error.message ?? \"no error message\"),\n      wrap: true,\n      spacing: \"None\"\n    }\n  ];\n  // Some errors carry extra detail, such as Splunk's own explanation\n  if (error.description) {\n    blocks.push({\n      type: \"TextBlock\",\n      text: \"Details: \" + error.description,\n      wrap: true,\n      spacing: \"None\"\n    });\n  }\n  // Button to the failed run, when there is one\n  const actions = failure.execution?.url\n    ? [\n        {\n          type: \"Action.OpenUrl\",\n          title: \"Open the failed run\",\n          url: failure.execution.url\n        }\n      ]\n    : [];\n  // Teams Workflows webhooks expect an Adaptive Card wrapped in a message\n  return {\n    type: \"message\",\n    attachments: [\n      {\n        contentType: \"application/vnd.microsoft.card.adaptive\",\n        contentUrl: null,\n        content: {\n          \"$schema\": \"http://adaptivecards.io/schemas/adaptive-card.json\",\n          type: \"AdaptiveCard\",\n          version: \"1.4\",\n          body: blocks,\n          actions: actions\n        }\n      }\n    ]\n  };\n})() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "notes": "Kept as its own step so test runs (which never execute the Teams post) can check the exact message, and so every run log shows what was sent."
+    },
+    {
+      "id": "e9edf974-c044-46e7-954e-368daf1daf6c",
+      "name": "Send error to my DM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        496,
+        352
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "<__PLACEHOLDER_VALUE__DM webhook URL from Teams, without the &sig=... part__>",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $(\"Build error message\").item.json.teamsPayload }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "notes": "Setup: URL = the DM webhook URL from Teams Workflows with its \"&sig=...\" part removed. The sig value goes in the Query Auth credential (Name: sig, Value: the sig value).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Every weekday at 9 AM ET": {
+      "main": [
+        [
+          {
+            "node": "Run license usage search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run license usage search": {
+      "main": [
+        [
+          {
+            "node": "Get search results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get search results": {
+      "main": [
+        [
+          {
+            "node": "Did Splunk return rows?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Did Splunk return rows?": {
+      "main": [
+        [
+          {
+            "node": "Build usage message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail: no usage rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build usage message": {
+      "main": [
+        [
+          {
+            "node": "Post usage to group chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Build error message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build error message": {
+      "main": [
+        [
+          {
+            "node": "Send error to my DM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "America/New_York"
+  },
+  "nodeGroups": [
+    {
+      "id": "2700901f-8680-4cb2-9008-51b8ea9c3519",
+      "name": "Query Splunk",
+      "nodeIds": [
+        "a08415ae-079b-4d3d-9fe0-35ee1049c19d",
+        "822363b4-67d9-4490-b237-48e415b5f6f1"
+      ],
+      "description": "Runs the license usage search and waits for it: Friday to Sunday on Mondays, yesterday otherwise. One row per day."
+    },
+    {
+      "id": "96147e44-0d0a-4104-bcdf-5306a5ad79e3",
+      "name": "Check rows and post",
+      "nodeIds": [
+        "b8ba439b-2b32-4912-b339-0f02baa94792",
+        "8c5f6725-369b-4feb-923f-4db703f33a87",
+        "c51ac39c-a9e7-4adf-b47b-5fd454936662",
+        "b4861f53-2d67-44ba-949f-3c3eed967429"
+      ],
+      "description": "Posts one block per day to the Teams group chat. No rows stops the run with an error, which alerts the DM."
+    },
+    {
+      "id": "155c5b32-cbe5-4f3b-863f-dd930142432b",
+      "name": "Alert my DM",
+      "nodeIds": [
+        "a06a197e-9f50-4fbf-be46-2600a0681c6a",
+        "e9edf974-c044-46e7-954e-368daf1daf6c"
+      ],
+      "description": "Runs when any step above fails: posts the failed step, the error and a link to the run to the Teams DM."
+    }
+  ],
+  "versionId": "f1d21895-78b7-45c5-8df1-f04cefb1d4a0",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "id": "2Pdw5MUOVtYXe0gr",
+  "pinData": {},
+  "active": false,
+  "tags": [
+    {
+      "id": "A1DEzgnUkCaDSgG9",
+      "name": "teams"
+    },
+    {
+      "id": "Epegl04XO2rzetXw",
+      "name": "splunk"
+    },
+    {
+      "id": "RNJdzkyiBysulqht",
+      "name": "ops"
+    }
+  ]
+}
