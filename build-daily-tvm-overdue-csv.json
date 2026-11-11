@@ -65,6 +65,18 @@
               "type": "string"
             },
             {
+              "id": "dashboard-folder-path",
+              "name": "dashboardFolderPath",
+              "value": "Type/the/TVM/folder/path",
+              "type": "string"
+            },
+            {
+              "id": "csv-folder-path",
+              "name": "csvFolderPath",
+              "value": "Type/the/CSV/folder/path",
+              "type": "string"
+            },
+            {
               "id": "people",
               "name": "people",
               "value": "={{ [\"Alex Example\", \"Sam Sample\"] }}",
@@ -74,7 +86,7 @@
         },
         "options": {}
       },
-      "notes": "Fill in before the first run. sharepointHost: your SharePoint host, e.g. contoso.sharepoint.com. people: names as they appear in the dashboard's Assigned To column (letter case and extra spaces don't matter). The placeholder names only produce header-only CSVs."
+      "notes": "Fill in before the first run. sharepointHost: e.g. contoso.sharepoint.com. dashboardFolderPath and csvFolderPath: the folder paths inside each site's Documents library, e.g. Reports/TVM/2026/Daily (leave out \"Shared Documents\"). people: names as they appear in the dashboard's Assigned To column (letter case and extra spaces don't matter). The placeholder names only produce header-only CSVs."
     },
     {
       "id": "f9126b35-ffef-433a-9990-4e2aef4bfa60",
@@ -87,7 +99,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "=https://{{ $(\"Set SharePoint host and people\").first().json.sharepointHost }}/_api/v2.0/sites/{{ $(\"Upload CSV\").params.site.value }}/drive/items/{{ $(\"Upload CSV\").params.folder.value }}/children?$select=id,name,file,lastModifiedDateTime",
+        "url": "=https://{{ $(\"Set SharePoint host and people\").first().json.sharepointHost }}/_api/v2.0/sites/{{ $(\"Upload CSV\").params.site.value }}/drive/{{ (() => {\n  // csvFolderPath: folder path inside the Documents library, typed in \"Set SharePoint host and people\"\n  const parts = String($(\"Set SharePoint host and people\").first().json.csvFolderPath ?? \"\")\n    .split(/[\\\\/]/)\n    .map(part => part.trim())\n    .filter(Boolean);\n  return parts.length ? \"root:/\" + parts.map(encodeURIComponent).join(\"/\") + \":\" : \"root\";\n})() }}/children?$select=id,name,file,lastModifiedDateTime",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "microsoftSharePointOAuth2Api",
         "options": {
@@ -104,7 +116,7 @@
           "timeout": 30000
         }
       },
-      "notes": "Lists the destination folder picked in \"Upload CSV\". HTTP Request because SharePoint node v1 has no list-files operation; it uses the same Microsoft SharePoint OAuth2 API credential.",
+      "notes": "Lists csvFolderPath (from the first step) on the site picked in \"Upload CSV\". HTTP Request because SharePoint node v1 has no list-files operation; it uses the same Microsoft SharePoint OAuth2 API credential.",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000
@@ -120,7 +132,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "=https://{{ $(\"Set SharePoint host and people\").first().json.sharepointHost }}/_api/v2.0/sites/{{ $(\"Download dashboard\").params.site.value }}/drive/items/{{ $(\"Download dashboard\").params.folder.value }}/children?$select=id,name,file,lastModifiedDateTime",
+        "url": "=https://{{ $(\"Set SharePoint host and people\").first().json.sharepointHost }}/_api/v2.0/sites/{{ $(\"Download dashboard\").params.site.value }}/drive/{{ (() => {\n  // dashboardFolderPath: folder path inside the Documents library, typed in \"Set SharePoint host and people\"\n  const parts = String($(\"Set SharePoint host and people\").first().json.dashboardFolderPath ?? \"\")\n    .split(/[\\\\/]/)\n    .map(part => part.trim())\n    .filter(Boolean);\n  return parts.length ? \"root:/\" + parts.map(encodeURIComponent).join(\"/\") + \":\" : \"root\";\n})() }}/children?$select=id,name,file,lastModifiedDateTime",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "microsoftSharePointOAuth2Api",
         "options": {
@@ -137,7 +149,7 @@
           "timeout": 30000
         }
       },
-      "notes": "Lists the TVM folder picked in \"Download dashboard\". Runs once even when the CSV listing came back in several pages.",
+      "notes": "Lists dashboardFolderPath (from the first step) on the site picked in \"Download dashboard\". Runs once even when the CSV listing came back in several pages.",
       "executeOnce": true,
       "retryOnFail": true,
       "maxTries": 3,
@@ -227,12 +239,13 @@
         "site": {
           "__rl": true,
           "mode": "list",
-          "value": ""
+          "value": "pick-a-site",
+          "cachedResultName": "Pick the TVM site"
         },
         "folder": {
           "__rl": true,
-          "mode": "list",
-          "value": ""
+          "mode": "id",
+          "value": "root"
         },
         "file": {
           "__rl": true,
@@ -240,7 +253,7 @@
           "value": "={{ $(\"Keep dashboards needing a CSV\").item.json.id }}"
         }
       },
-      "notes": "SharePoint node v1 on purpose: in n8n 2.44.5, v2 cannot use the Microsoft SharePoint OAuth2 API credential. Pick the TVM site and folder here; \"List TVM folder files\" reuses them. The file ID comes from the filter step.",
+      "notes": "SharePoint node v1 on purpose: in n8n 2.44.5, v2 cannot use the Microsoft SharePoint OAuth2 API credential. Only pick the TVM site here (Site > From list). Leave Parent Folder as root and File as it is: the folder comes from dashboardFolderPath and the file from the filter step.",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000
@@ -296,17 +309,18 @@
         "site": {
           "__rl": true,
           "mode": "list",
-          "value": ""
+          "value": "pick-a-site",
+          "cachedResultName": "Pick the destination site"
         },
         "folder": {
           "__rl": true,
-          "mode": "list",
-          "value": ""
+          "mode": "id",
+          "value": "root"
         },
-        "fileName": "={{ $(\"Extract tickets to CSV text\").item.json.fileName }}",
+        "fileName": "={{ (() => {\n  // csvFolderPath, URL-encoded part by part, then the CSV's name: Parent Folder is \"root\"\n  const parts = String($(\"Set SharePoint host and people\").first().json.csvFolderPath ?? \"\")\n    .split(/[\\\\/]/)\n    .map(part => part.trim())\n    .filter(Boolean);\n  return [...parts.map(encodeURIComponent), $(\"Extract tickets to CSV text\").item.json.fileName].join(\"/\");\n})() }}",
         "fileContents": "data"
       },
-      "notes": "SharePoint node v1 (see \"Download dashboard\"). Pick the destination site and folder; \"List CSVs already uploaded\" reuses them. A file with the same name is replaced.",
+      "notes": "SharePoint node v1 (see \"Download dashboard\"). Only pick the destination site here. Leave Parent Folder as root: the CSV goes to csvFolderPath from the first step. A file with the same name is replaced.",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000
