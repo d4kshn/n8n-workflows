@@ -1,0 +1,578 @@
+{
+  "name": "Build daily TVM overdue CSV",
+  "description": "Weekdays at 12 and 3 PM ET, turns each new TVM dashboard (SLA_Flow_Stock_YYYY-MM-DD.html) in SharePoint into tvm-overdue-YYYY-MM-DD.csv for the listed people and uploads it. Polls since the SharePoint OAuth2 credential only works with SharePoint node v1.",
+  "nodes": [
+    {
+      "id": "efef6db2-975c-4ffe-b781-35faa3549255",
+      "name": "Weekdays at 12 PM and 3 PM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 12,
+              "triggerAtMinute": 0
+            },
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 15,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "776319cc-15ac-4758-b32d-5ba10807ffcc",
+      "name": "Set SharePoint host and people",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sharepoint-host",
+              "name": "sharepointHost",
+              "value": "your-tenant.sharepoint.com",
+              "type": "string"
+            },
+            {
+              "id": "people",
+              "name": "people",
+              "value": "={{ [\"Alex Example\", \"Sam Sample\"] }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "notes": "Fill in before the first run. sharepointHost: your SharePoint host, e.g. contoso.sharepoint.com. people: names as they appear in the dashboard's Assigned To column (letter case and extra spaces don't matter). The placeholder names only produce header-only CSVs."
+    },
+    {
+      "id": "f9126b35-ffef-433a-9990-4e2aef4bfa60",
+      "name": "List CSVs already uploaded",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        496,
+        128
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://{{ $(\"Set SharePoint host and people\").first().json.sharepointHost }}/_api/v2.0/sites/{{ $(\"Upload CSV\").params.site.value }}/drive/items/{{ $(\"Upload CSV\").params.folder.value }}/children?$select=id,name,file,lastModifiedDateTime",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftSharePointOAuth2Api",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "responseContainsNextURL",
+              "nextURL": "={{ $response.body[\"@odata.nextLink\"] }}",
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body[\"@odata.nextLink\"] }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "notes": "Lists the destination folder picked in \"Upload CSV\". HTTP Request because SharePoint node v1 has no list-files operation; it uses the same Microsoft SharePoint OAuth2 API credential.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "be277733-0654-49c5-bdc4-f997358b46ba",
+      "name": "List TVM folder files",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        720,
+        128
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://{{ $(\"Set SharePoint host and people\").first().json.sharepointHost }}/_api/v2.0/sites/{{ $(\"Download dashboard\").params.site.value }}/drive/items/{{ $(\"Download dashboard\").params.folder.value }}/children?$select=id,name,file,lastModifiedDateTime",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftSharePointOAuth2Api",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "responseContainsNextURL",
+              "nextURL": "={{ $response.body[\"@odata.nextLink\"] }}",
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body[\"@odata.nextLink\"] }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "notes": "Lists the TVM folder picked in \"Download dashboard\". Runs once even when the CSV listing came back in several pages.",
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "96bd0da2-9b6c-4fd8-b688-f535ffc18791",
+      "name": "Split out files",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        944,
+        128
+      ],
+      "parameters": {
+        "fieldToSplitOut": "value",
+        "include": "noOtherFields",
+        "options": {}
+      }
+    },
+    {
+      "id": "ea7a7197-d73f-4a80-9a55-c6c08b1ed8a1",
+      "name": "Keep dashboards needing a CSV",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.4,
+      "position": [
+        1168,
+        128
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "is-tvm-dashboard",
+              "leftValue": "={{ $(\"Split out files\").item.json.name }}",
+              "rightValue": "^SLA_Flow_Stock_[0-9]{4}-[0-9]{2}-[0-9]{2}[.]html$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            },
+            {
+              "id": "dated-in-last-7-days",
+              "leftValue": "={{ $(\"Split out files\").item.json.name.slice(15, 25) >= $today.minus({ days: 7 }).toFormat(\"yyyy-MM-dd\") }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "csv-missing-or-older",
+              "leftValue": "={{ (() => {\n  // The CSV this dashboard produces: tvm-overdue-<date from the dashboard name>.csv\n  const dashboard = $(\"Split out files\").item.json;\n  const csvName = \"tvm-overdue-\" + dashboard.name.slice(15, 25) + \".csv\";\n  const csv = $(\"List CSVs already uploaded\").all()\n    .flatMap(page => page.json.value ?? [])\n    .find(file => file.name === csvName);\n  // Needed when the CSV is missing, or the dashboard was re-uploaded after the CSV was made\n  return !csv || DateTime.fromISO(dashboard.lastModifiedDateTime) > DateTime.fromISO(csv.lastModifiedDateTime);\n})() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "notes": "Keeps SLA_Flow_Stock_YYYY-MM-DD.html files dated in the last 7 days whose tvm-overdue CSV is missing, or older than the dashboard (a re-upload). The 7-day window stops edits or moves of old dashboards from rebuilding their CSVs."
+    },
+    {
+      "id": "993601e5-87dd-47ac-be7b-0c0c9464ed9c",
+      "name": "Download dashboard",
+      "type": "n8n-nodes-base.microsoftSharePoint",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        128
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "site": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "folder": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "file": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $(\"Keep dashboards needing a CSV\").item.json.id }}"
+        }
+      },
+      "notes": "SharePoint node v1 on purpose: in n8n 2.44.5, v2 cannot use the Microsoft SharePoint OAuth2 API credential. Pick the TVM site and folder here; \"List TVM folder files\" reuses them. The file ID comes from the filter step.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "ed667fa9-eef0-4276-842c-213c497ee83d",
+      "name": "Extract tickets to CSV text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        128
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Turns each downloaded SLA_Flow_Stock dashboard into the text of tvm-overdue-YYYY-MM-DD.csv.\n//\n// The dashboard repeats every ticket once per team and per owner, so only the \"All teams\"\n// copy is read: the Active Tickets table and the Ready for Validation & Pending/PER table.\n// If the layout changes (a table is missing, a row doesn't have 11 cells, or the number of\n// rows doesn't match the table's own \"All active (N)\" total), this step fails instead of\n// uploading a wrong CSV.\n\nconst TABLES = [\n  { id: 'scope-all-active-table', key: 'active' },\n  { id: 'scope-all-held-active-table', key: 'readyOrPending' },\n];\n\n// Column names and order of the CSV, matching the existing TVM Tickets sheet\nconst HEADER = [\n  'Overdue Tickets', 'Ticket URL', 'Severity', 'State', 'Status', 'Assignment Group',\n  'Assignment', 'Created', 'Days Actual', 'SLA Days', 'Days Over', 'Summary', 'UploadDate',\n];\n\nconst SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };\n\nconst NAMED_ENTITIES = {\n  amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ', mdash: '—', ndash: '–',\n  hellip: '…', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', bull: '•',\n};\n\n// Turns HTML codes like &amp; and &#x27; back into the characters they stand for\nconst decodeEntities = (text) =>\n  text.replace(/&(#[0-9]+|#x[0-9a-f]+|[a-z]+);/gi, (match, entity) => {\n    if (entity[0] === '#') {\n      const isHex = entity[1].toLowerCase() === 'x';\n      const code = parseInt(entity.slice(isHex ? 2 : 1), isHex ? 16 : 10);\n      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;\n    }\n    return NAMED_ENTITIES[entity.toLowerCase()] ?? match;\n  });\n\n// A table cell as plain text: tags removed, codes decoded, whitespace squeezed to single spaces\nconst cellText = (html) =>\n  decodeEntities(html.replace(/<[^>]*>/g, ''))\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n// The description box as plain text, keeping its line breaks\nconst descriptionText = (html) => {\n  const box = html.match(/<div[^>]*class=\"[^\"]*desc-box[^\"]*\"[^>]*>([\\s\\S]*)<\\/div>/);\n  const inner = box ? box[1] : html;\n  return decodeEntities(inner.replace(/<br\\s*\\/?>/gi, '\\n').replace(/<[^>]*>/g, ''))\n    .replace(/\\r\\n?/g, '\\n')\n    .trim();\n};\n\n// Lower case with single spaces, so the people list can be typed loosely\nconst normalizeName = (name) => String(name).replace(/\\s+/g, ' ').trim().toLowerCase();\n\n// Quotes a CSV field when it holds a comma, a quote or a line break\nconst csvField = (value) => {\n  const text = String(value ?? '');\n  return /[\",\\r\\n]/.test(text) ? '\"' + text.replace(/\"/g, '\"\"') + '\"' : text;\n};\n\n// Reads one ticket table and checks it against the total the dashboard states for it\nconst readTable = (html, id, fileName) => {\n  const layoutError = (problem) =>\n    new Error('Dashboard layout changed: ' + problem + ' (' + fileName + ')');\n\n  const start = html.search(new RegExp('<table[^>]*\\\\bid=\"' + id + '\"'));\n  if (start === -1) throw layoutError('table \"' + id + '\" not found');\n  const end = html.indexOf('</table>', start);\n  const table = html.slice(start, end === -1 ? html.length : end);\n\n  // The table's Show filter, e.g. <option value=\"all\" ...>All active (277)</option>\n  const filterId = id.replace(/-table$/, '-filter');\n  const select = html.match(new RegExp('<select[^>]*\\\\bid=\"' + filterId + '\"[^>]*>([\\\\s\\\\S]*?)</select>'));\n  const total = select && select[1].match(/<option[^>]*value=\"all\"[^>]*>[^<]*\\((\\d+)\\)/);\n  if (!total) throw layoutError('the ticket total for \"' + id + '\" was not found');\n\n  const tickets = [];\n  for (const row of table.matchAll(/<tr\\b[^>]*\\bdata-status=\"[^\"]*\"[^>]*>([\\s\\S]*?)<\\/tr>/g)) {\n    const cells = [...row[1].matchAll(/<td\\b[^>]*>([\\s\\S]*?)<\\/td>/g)].map((cell) => cell[1]);\n    if (cells.length !== 11) {\n      throw layoutError('a ticket row in \"' + id + '\" has ' + cells.length + ' cells instead of 11');\n    }\n    const link = cells[0].match(/<a\\b[^>]*\\bhref=\"([^\"]*)\"[^>]*>([\\s\\S]*?)<\\/a>/);\n    if (!link) throw layoutError('a ticket row in \"' + id + '\" has no ticket link');\n    tickets.push({\n      number: cellText(link[2]),\n      url: decodeEntities(link[1]),\n      summary: descriptionText(cells[1]),\n      severity: cellText(cells[2]),\n      state: cellText(cells[3]),\n      status: cellText(cells[4]),\n      group: cellText(cells[5]),\n      assignedTo: cellText(cells[6]),\n      created: cellText(cells[7]),\n      daysActual: cellText(cells[8]),\n      slaDays: cellText(cells[9]),\n      daysOver: cellText(cells[10]),\n    });\n  }\n\n  if (tickets.length !== Number(total[1])) {\n    throw layoutError('\"' + id + '\" lists ' + total[1] + ' tickets but ' + tickets.length + ' rows were read');\n  }\n  return tickets;\n};\n\n// The people whose tickets go in the CSV, keyed by their loosely typed name\nconst people = $('Set SharePoint host and people').first().json.people;\nconst listed = (Array.isArray(people) ? people : []).map((name) => String(name).trim()).filter(Boolean);\nif (listed.length === 0) {\n  throw new Error('No people listed. Add at least one name to \"people\" in the \"Set SharePoint host and people\" step.');\n}\nconst wanted = new Map(listed.map((name) => [normalizeName(name), name]));\n\nconst severityRank = (severity) => SEVERITY_ORDER[severity.toLowerCase()] ?? 4;\n\nconst results = [];\nconst inputs = $input.all();\nfor (let index = 0; index < inputs.length; index++) {\n  // The dashboard this download came from, for its file name and date\n  const dashboard = $('Keep dashboards needing a CSV').itemMatching(index).json;\n  const dateMatch = /^SLA_Flow_Stock_(\\d{4}-\\d{2}-\\d{2})\\.html$/.exec(dashboard.name);\n  if (!dateMatch) throw new Error('Unexpected dashboard file name: ' + dashboard.name);\n  const uploadDate = dateMatch[1];\n\n  const html = (await this.helpers.getBinaryDataBuffer(index, 'data')).toString('utf8');\n\n  const counts = {};\n  const tickets = [];\n  for (const table of TABLES) {\n    const rows = readTable(html, table.id, dashboard.name);\n    counts[table.key] = rows.length;\n    tickets.push(...rows);\n  }\n\n  // Keep the selected people's tickets: by person, then Critical to Low, then oldest first.\n  // Ties keep the dashboard's order (Active before Ready for Validation & Pending/PER).\n  const kept = tickets\n    .filter((ticket) => wanted.has(normalizeName(ticket.assignedTo)))\n    .sort(\n      (a, b) =>\n        a.assignedTo.localeCompare(b.assignedTo) ||\n        severityRank(a.severity) - severityRank(b.severity) ||\n        Number(b.daysActual) - Number(a.daysActual),\n    );\n\n  const lines = [HEADER].concat(\n    kept.map((ticket) => [\n      ticket.number, ticket.url, ticket.severity, ticket.state, ticket.status, ticket.group,\n      ticket.assignedTo, ticket.created, ticket.daysActual, ticket.slaDays, ticket.daysOver,\n      ticket.summary, uploadDate,\n    ]),\n  );\n  const csv = lines.map((values) => values.map(csvField).join(',')).join('\\r\\n') + '\\r\\n';\n\n  const namesWithTickets = new Set(kept.map((ticket) => normalizeName(ticket.assignedTo)));\n  const peopleWithoutTickets = [...wanted]\n    .filter(([key]) => !namesWithTickets.has(key))\n    .map(([, name]) => name);\n\n  results.push({\n    json: {\n      fileName: 'tvm-overdue-' + uploadDate + '.csv',\n      dashboard: dashboard.name,\n      uploadDate,\n      dashboardTickets: counts,\n      ticketsWritten: kept.length,\n      peopleWithoutTickets,\n      csv,\n    },\n    pairedItem: { item: index },\n  });\n}\n\nreturn results;\n"
+      },
+      "notes": "Reads only the \"All teams\" tables (Active, and Ready for Validation & Pending/PER) and keeps the people from \"Set SharePoint host and people\". Fails on a layout change instead of uploading a wrong CSV."
+    },
+    {
+      "id": "f9bf7b06-87ca-4aba-a136-4710d81f1429",
+      "name": "Make CSV file",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1472,
+        128
+      ],
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "csv",
+        "binaryPropertyName": "data",
+        "options": {
+          "encoding": "utf8",
+          "addBOM": true,
+          "fileName": "={{ $(\"Extract tickets to CSV text\").item.json.fileName }}"
+        }
+      },
+      "notes": "Adds a UTF-8 byte-order mark so Excel shows the — in Days Over correctly."
+    },
+    {
+      "id": "0b1fdcff-2708-41e1-8976-e9a3ccd995aa",
+      "name": "Upload CSV",
+      "type": "n8n-nodes-base.microsoftSharePoint",
+      "typeVersion": 1,
+      "position": [
+        1696,
+        128
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "site": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "folder": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "fileName": "={{ $(\"Extract tickets to CSV text\").item.json.fileName }}",
+        "fileContents": "data"
+      },
+      "notes": "SharePoint node v1 (see \"Download dashboard\"). Pick the destination site and folder; \"List CSVs already uploaded\" reuses them. A file with the same name is replaced.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "650114a0-d872-4ae7-9261-bd9042f2d92d",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        224
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "1a85e861-6de8-43c2-8c8a-9b435b5babe4",
+      "name": "Build error message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        272,
+        352
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "teams-payload",
+              "name": "teamsPayload",
+              "value": "={{ (() => {\n  // A failed step reports under \"execution\"; a failed schedule trigger reports under \"trigger\"\n  const failure = $(\"On workflow error\").item.json;\n  const error = failure.execution?.error ?? failure.trigger?.error ?? {};\n  const blocks = [\n    {\n      type: \"TextBlock\",\n      text: failure.workflow.name + \" failed\",\n      weight: \"Bolder\",\n      wrap: true\n    },\n    {\n      type: \"TextBlock\",\n      text: \"Step: \" + (failure.execution?.lastNodeExecuted ?? \"schedule trigger\"),\n      wrap: true,\n      spacing: \"Small\"\n    },\n    {\n      type: \"TextBlock\",\n      text: \"Error: \" + (error.message ?? \"no error message\"),\n      wrap: true,\n      spacing: \"None\"\n    }\n  ];\n  // Some errors carry extra detail, such as SharePoint's own explanation\n  if (error.description) {\n    blocks.push({\n      type: \"TextBlock\",\n      text: \"Details: \" + error.description,\n      wrap: true,\n      spacing: \"None\"\n    });\n  }\n  // Button to the failed run, when there is one\n  const actions = failure.execution?.url\n    ? [\n        {\n          type: \"Action.OpenUrl\",\n          title: \"Open the failed run\",\n          url: failure.execution.url\n        }\n      ]\n    : [];\n  // Teams Workflows webhooks expect an Adaptive Card wrapped in a message\n  return {\n    type: \"message\",\n    attachments: [\n      {\n        contentType: \"application/vnd.microsoft.card.adaptive\",\n        contentUrl: null,\n        content: {\n          \"$schema\": \"http://adaptivecards.io/schemas/adaptive-card.json\",\n          type: \"AdaptiveCard\",\n          version: \"1.4\",\n          body: blocks,\n          actions: actions\n        }\n      }\n    ]\n  };\n})() }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "notes": "Kept as its own step so test runs (which never execute the Teams post) can check the exact message, and so every run log shows what was sent."
+    },
+    {
+      "id": "69facb47-d083-4f66-ad44-351539a58eb1",
+      "name": "Send error to my DM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        496,
+        352
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "<__PLACEHOLDER_VALUE__DM webhook URL from Teams, without the &sig=... part__>",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $(\"Build error message\").item.json.teamsPayload }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "notes": "Setup: URL = the DM webhook URL from Teams Workflows with its \"&sig=...\" part removed. The sig value goes in the Query Auth credential (Name: sig, Value: the sig value).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "e70ed905-d816-4ea3-b2e4-de1676ea8936",
+      "name": "Sticky Note 8c485022",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        192,
+        -96
+      ],
+      "parameters": {
+        "content": "### Fill in before the first run",
+        "color": 3,
+        "width": 160,
+        "height": 224
+      }
+    }
+  ],
+  "connections": {
+    "Weekdays at 12 PM and 3 PM": {
+      "main": [
+        [
+          {
+            "node": "Set SharePoint host and people",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set SharePoint host and people": {
+      "main": [
+        [
+          {
+            "node": "List CSVs already uploaded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List CSVs already uploaded": {
+      "main": [
+        [
+          {
+            "node": "List TVM folder files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List TVM folder files": {
+      "main": [
+        [
+          {
+            "node": "Split out files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split out files": {
+      "main": [
+        [
+          {
+            "node": "Keep dashboards needing a CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep dashboards needing a CSV": {
+      "main": [
+        [
+          {
+            "node": "Download dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download dashboard": {
+      "main": [
+        [
+          {
+            "node": "Extract tickets to CSV text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract tickets to CSV text": {
+      "main": [
+        [
+          {
+            "node": "Make CSV file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Make CSV file": {
+      "main": [
+        [
+          {
+            "node": "Upload CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Build error message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build error message": {
+      "main": [
+        [
+          {
+            "node": "Send error to my DM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "America/New_York"
+  },
+  "nodeGroups": [
+    {
+      "id": "06391fa0-6186-4e42-825f-e36b9b4eaf33",
+      "name": "Find dashboards to convert",
+      "nodeIds": [
+        "f9126b35-ffef-433a-9990-4e2aef4bfa60",
+        "be277733-0654-49c5-bdc4-f997358b46ba",
+        "96bd0da2-9b6c-4fd8-b688-f535ffc18791",
+        "ea7a7197-d73f-4a80-9a55-c6c08b1ed8a1"
+      ],
+      "description": "Lists both SharePoint folders, then keeps SLA_Flow_Stock dashboards from the last 7 days whose CSV is missing or older than the dashboard."
+    },
+    {
+      "id": "720a0e8c-7597-4b68-8677-1853302b2f54",
+      "name": "Build and upload the CSV",
+      "nodeIds": [
+        "993601e5-87dd-47ac-be7b-0c0c9464ed9c",
+        "ed667fa9-eef0-4276-842c-213c497ee83d",
+        "f9bf7b06-87ca-4aba-a136-4710d81f1429",
+        "0b1fdcff-2708-41e1-8976-e9a3ccd995aa"
+      ],
+      "description": "Downloads each dashboard, writes the listed people's tickets in the TVM Tickets layout, and uploads tvm-overdue-YYYY-MM-DD.csv over any old copy."
+    },
+    {
+      "id": "8c3122db-297e-48c1-bdba-0a066260ff4e",
+      "name": "Alert my DM",
+      "nodeIds": [
+        "1a85e861-6de8-43c2-8c8a-9b435b5babe4",
+        "69facb47-d083-4f66-ad44-351539a58eb1"
+      ],
+      "description": "Runs when any step above fails: posts the failed step, the error and a link to the run to the Teams DM."
+    }
+  ],
+  "versionId": "80404069-93dd-4ab2-8644-9d9b44fd149d",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "id": "jtJKqQaDokNnqduR",
+  "pinData": {},
+  "active": false,
+  "tags": [
+    {
+      "id": "0dSuGZPXNIyOIkGh",
+      "name": "sharepoint"
+    },
+    {
+      "id": "4iKWjprnXbUNcdcR",
+      "name": "tvm"
+    },
+    {
+      "id": "RNJdzkyiBysulqht",
+      "name": "ops"
+    }
+  ]
+}
